@@ -1,0 +1,399 @@
+// CRM HVAC — Prisma schema
+// Diseñado para escalar: auditoría, soft-delete opcional, índices en búsquedas comunes.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  // En Vercel + Neon, Vercel inyecta POSTGRES_PRISMA_URL automáticamente.
+  // En desarrollo local, usa DATABASE_URL del .env
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// USUARIOS Y ROLES
+// ============================================================
+
+enum Role {
+  ADMIN
+  SALES
+  OPERATIONS
+  MANAGEMENT
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role     @default(SALES)
+  avatar       String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  ownedClients   Client[]            @relation("ClientOwner")
+  ownedQuotes    Quote[]             @relation("QuoteOwner")
+  managedProjects Project[]          @relation("ProjectManager")
+  followUps      FollowUp[]
+  comments       Comment[]
+  attachments    Attachment[]
+  notifications  Notification[]
+  activityLogs   ActivityLog[]
+  statusChanges  QuoteStatusHistory[]
+
+  @@index([email])
+}
+
+// ============================================================
+// CLIENTES
+// ============================================================
+
+enum ClientStatus {
+  PROSPECT
+  ACTIVE
+  INACTIVE
+}
+
+model Client {
+  id                String       @id @default(cuid())
+  companyName       String
+  rut               String       @unique
+  businessActivity  String?
+  address           String?
+  city              String?
+  region            String?
+  mainContactName   String?
+  phone             String?
+  email             String?
+  notes             String?
+  status            ClientStatus @default(PROSPECT)
+  ownerId           String?
+  owner             User?        @relation("ClientOwner", fields: [ownerId], references: [id])
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  quotes   Quote[]
+  projects Project[]
+  tags     ClientTag[]
+
+  @@index([companyName])
+  @@index([rut])
+  @@index([status])
+}
+
+model Tag {
+  id      String      @id @default(cuid())
+  name    String      @unique
+  color   String      @default("#3B82F6")
+  clients ClientTag[]
+}
+
+model ClientTag {
+  clientId String
+  tagId    String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  tag      Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([clientId, tagId])
+}
+
+// ============================================================
+// COTIZACIONES (CORE)
+// ============================================================
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  PENDING
+  FOLLOW_UP
+  WON
+  LOST
+}
+
+enum PipelineStage {
+  NEW_LEAD
+  CONTACTED
+  QUOTE_SENT
+  FOLLOW_UP
+  NEGOTIATION
+  WON
+  LOST
+}
+
+model Quote {
+  id                  String        @id @default(cuid())
+  code                String        @unique
+  clientId            String
+  client              Client        @relation(fields: [clientId], references: [id])
+  ownerId             String
+  owner               User          @relation("QuoteOwner", fields: [ownerId], references: [id])
+
+  status              QuoteStatus   @default(DRAFT)
+  pipelineStage       PipelineStage @default(NEW_LEAD)
+
+  issueDate           DateTime      @default(now())
+  expirationDate      DateTime?
+
+  // Información técnica
+  workType            String?       // Instalación nueva / Mantención / Reparación
+  ductType            String?       // Galvanizado / Acero inox / Flexible / Fibra
+  linearMeters        Float?
+  material            String?
+  thickness           String?
+  installationType    String?
+  requiresLabor       Boolean       @default(true)
+  equipmentNeeded     String?
+  technicalNotes      String?
+
+  // Costos
+  materialsCost       Decimal       @default(0) @db.Decimal(14, 2)
+  laborCost           Decimal       @default(0) @db.Decimal(14, 2)
+  transportCost       Decimal       @default(0) @db.Decimal(14, 2)
+  equipmentCost       Decimal       @default(0) @db.Decimal(14, 2)
+  indirectCost        Decimal       @default(0) @db.Decimal(14, 2)
+  marginPercent       Float         @default(20)
+  subtotal            Decimal       @default(0) @db.Decimal(14, 2)
+  taxRate             Float         @default(19) // IVA Chile
+  taxAmount           Decimal       @default(0) @db.Decimal(14, 2)
+  total               Decimal       @default(0) @db.Decimal(14, 2)
+
+  // Seguimiento comercial
+  closingProbability  Int           @default(50)
+  competitorInfo      String?
+  lastContactDate     DateTime?
+  nextFollowUpDate    DateTime?
+  commercialNotes     String?
+
+  version             Int           @default(1)
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  items           QuoteItem[]
+  followUps       FollowUp[]
+  statusHistory   QuoteStatusHistory[]
+  project         Project?
+
+  @@index([code])
+  @@index([status])
+  @@index([pipelineStage])
+  @@index([clientId])
+  @@index([ownerId])
+  @@index([expirationDate])
+}
+
+model QuoteItem {
+  id          String  @id @default(cuid())
+  quoteId     String
+  quote       Quote   @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  description String
+  quantity    Float   @default(1)
+  unit        String  @default("UN")
+  unitPrice   Decimal @default(0) @db.Decimal(14, 2)
+  total       Decimal @default(0) @db.Decimal(14, 2)
+  order       Int     @default(0)
+}
+
+model QuoteStatusHistory {
+  id         String       @id @default(cuid())
+  quoteId    String
+  quote      Quote        @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  fromStatus QuoteStatus?
+  toStatus   QuoteStatus
+  userId     String
+  user       User         @relation(fields: [userId], references: [id])
+  comment    String?
+  changedAt  DateTime     @default(now())
+
+  @@index([quoteId])
+}
+
+// ============================================================
+// SEGUIMIENTOS
+// ============================================================
+
+enum FollowUpType {
+  CALL
+  EMAIL
+  MEETING
+  WHATSAPP
+  OTHER
+}
+
+enum FollowUpOutcome {
+  PENDING
+  COMPLETED
+  NO_ANSWER
+  RESCHEDULED
+  CANCELLED
+}
+
+model FollowUp {
+  id          String          @id @default(cuid())
+  quoteId     String?
+  quote       Quote?          @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  type        FollowUpType
+  scheduledAt DateTime
+  completedAt DateTime?
+  notes       String?
+  outcome     FollowUpOutcome @default(PENDING)
+  userId      String
+  user        User            @relation(fields: [userId], references: [id])
+  createdAt   DateTime        @default(now())
+
+  @@index([scheduledAt])
+  @@index([userId])
+  @@index([outcome])
+}
+
+// ============================================================
+// PROYECTOS
+// ============================================================
+
+enum ProjectStatus {
+  PLANNING
+  IN_PROGRESS
+  PAUSED
+  COMPLETED
+  INVOICED
+}
+
+model Project {
+  id              String        @id @default(cuid())
+  code            String        @unique
+  name            String
+  quoteId         String?       @unique
+  quote           Quote?        @relation(fields: [quoteId], references: [id])
+  clientId        String
+  client          Client        @relation(fields: [clientId], references: [id])
+  managerId       String
+  manager         User          @relation("ProjectManager", fields: [managerId], references: [id])
+
+  status          ProjectStatus @default(PLANNING)
+  startDate       DateTime?
+  endDate         DateTime?
+  progressPercent Int           @default(0)
+
+  budgetTotal     Decimal       @default(0) @db.Decimal(14, 2)
+  realCostTotal   Decimal       @default(0) @db.Decimal(14, 2)
+
+  notes           String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  costs      ProjectCost[]
+  milestones ProjectMilestone[]
+
+  @@index([status])
+  @@index([clientId])
+}
+
+model ProjectCost {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  category    String
+  description String?
+  amount      Decimal  @db.Decimal(14, 2)
+  date        DateTime @default(now())
+  createdAt   DateTime @default(now())
+}
+
+model ProjectMilestone {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  dueDate     DateTime?
+  completedAt DateTime?
+  order       Int      @default(0)
+}
+
+// ============================================================
+// ADJUNTOS, COMENTARIOS, NOTIFICACIONES, AUDITORÍA
+// ============================================================
+
+enum EntityType {
+  QUOTE
+  PROJECT
+  CLIENT
+}
+
+model Attachment {
+  id         String     @id @default(cuid())
+  entityType EntityType
+  entityId   String
+  fileName   String
+  fileUrl    String
+  mimeType   String?
+  size       Int?
+  uploadedBy String
+  user       User       @relation(fields: [uploadedBy], references: [id])
+  createdAt  DateTime   @default(now())
+
+  @@index([entityType, entityId])
+}
+
+model Comment {
+  id         String     @id @default(cuid())
+  entityType EntityType
+  entityId   String
+  userId     String
+  user       User       @relation(fields: [userId], references: [id])
+  body       String
+  isInternal Boolean    @default(true)
+  createdAt  DateTime   @default(now())
+
+  @@index([entityType, entityId])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  body      String?
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt])
+}
+
+model ActivityLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  action     String
+  entityType String?
+  entityId   String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+// ============================================================
+// CONFIGURACIÓN (singleton para datos de empresa)
+// ============================================================
+
+model CompanySettings {
+  id          String   @id @default("singleton")
+  companyName String   @default("HVAC Solutions SpA")
+  rut         String?
+  address     String?
+  phone       String?
+  email       String?
+  logoUrl     String?
+  taxRate     Float    @default(19)
+  currency    String   @default("CLP")
+  updatedAt   DateTime @updatedAt
+}
