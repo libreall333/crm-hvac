@@ -27,7 +27,9 @@ export function ClientForm({ initial }: { initial?: any }) {
     email: initial?.email || '',
     status: initial?.status || 'PROSPECT',
     notes: initial?.notes || '',
-  })  async function onSubmit(e: React.FormEvent) {
+  })
+
+  async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
     setLoading(true)
     setError(null)
